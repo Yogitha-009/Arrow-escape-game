@@ -11,16 +11,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * "camera" layered on top.
  *
  * Supports:
- *  - mouse wheel (zoom toward cursor)
- *  - trackpad pinch (reported by browsers as wheel events with ctrlKey=true)
- *  - touchscreen pinch (two-finger distance)
- *  - single-finger / mouse drag to pan (once zoomed in)
- *  - +/- buttons and a reset-to-fit action
+ *  - Zoom ONLY via the +/- buttons (and reset-to-fit) — no wheel-zoom, no
+ *    pinch-zoom. This is deliberate: zoom is a discrete, explicit action.
+ *  - Panning via: mouse drag, single-finger touch drag, AND wheel/trackpad
+ *    scroll (two-finger scroll on a laptop trackpad, or a mouse wheel) —
+ *    scrolling moves the view left/right/up/down, it never zooms.
  */
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 4;
-const WHEEL_ZOOM_SENSITIVITY = 0.0018;
 const BUTTON_ZOOM_STEP = 1.35;
 
 export interface ZoomPanState {
@@ -50,7 +49,7 @@ function zoomAround(
   };
 }
 
-/** Clamp pan so the board can't be dragged entirely out of view. */
+/** Clamp pan so the board can't be dragged/scrolled entirely out of view. */
 function clampPan(state: ZoomPanState, containerWidth: number, containerHeight: number): ZoomPanState {
   if (state.scale <= MIN_ZOOM) {
     return { ...state, x: 0, y: 0 };
@@ -78,7 +77,6 @@ export function useZoomPan() {
     originY: 0,
     moved: false,
   });
-  const pinchRef = useRef<{ active: boolean; startDist: number; startScale: number; midX: number; midY: number } | null>(null);
 
   const getContainerSize = useCallback(() => {
     const el = containerRef.current;
@@ -87,22 +85,17 @@ export function useZoomPan() {
     return { width: rect.width, height: rect.height };
   }, []);
 
-  // --- Wheel: normal scroll-wheel zoom AND trackpad pinch (ctrlKey) ---
-  const handleWheel = useCallback(
-    (e: React.WheelEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const screenX = e.clientX - rect.left;
-      const screenY = e.clientY - rect.top;
-      setState((prev) => {
-        const factor = Math.exp(-e.deltaY * WHEEL_ZOOM_SENSITIVITY);
-        const next = zoomAround(prev, screenX, screenY, prev.scale * factor);
-        return clampPan(next, rect.width, rect.height);
-      });
-    },
-    []
-  );
+  // --- Wheel / trackpad scroll: PANS the view, never zooms. Two-finger
+  // trackpad scroll on a laptop and a mouse wheel both surface as wheel
+  // events with deltaX/deltaY; we just translate by that delta directly.
+  const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setState((prev) =>
+      clampPan({ ...prev, x: prev.x - e.deltaX, y: prev.y - e.deltaY }, rect.width, rect.height)
+    );
+  }, []);
 
   // --- Mouse drag pan ---
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
@@ -147,77 +140,46 @@ export function useZoomPan() {
   /** True while the most recent mouse gesture was a drag past the click threshold — used to suppress accidental arrow taps mid-pan. */
   const wasDragging = useCallback(() => dragRef.current.moved, []);
 
-  // --- Touch: one-finger pan, two-finger pinch ---
+  // --- Touch: single-finger drag pans (mirrors "a scroll" on mobile).
+  // Multi-finger touch is deliberately NOT handled as pinch-zoom — zoom is
+  // buttons-only, so a second touch point is just ignored here.
   const handleTouchStart = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
-    if (e.touches.length === 2) {
-      const [a, b] = [e.touches[0], e.touches[1]];
-      if (!a || !b) return;
-      const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-      const rect = containerRef.current?.getBoundingClientRect();
-      pinchRef.current = {
-        active: true,
-        startDist: dist,
-        startScale: state.scale,
-        midX: (a.clientX + b.clientX) / 2 - (rect?.left ?? 0),
-        midY: (a.clientY + b.clientY) / 2 - (rect?.top ?? 0),
-      };
-      dragRef.current.active = false;
-    } else if (e.touches.length === 1) {
-      const t = e.touches[0];
-      if (!t) return;
-      dragRef.current = {
-        active: true,
-        startX: t.clientX,
-        startY: t.clientY,
-        originX: state.x,
-        originY: state.y,
-        moved: false,
-      };
-    }
-  }, [state.scale, state.x, state.y]);
+    if (e.touches.length !== 1) return;
+    const t = e.touches[0];
+    if (!t) return;
+    dragRef.current = {
+      active: true,
+      startX: t.clientX,
+      startY: t.clientY,
+      originX: state.x,
+      originY: state.y,
+      moved: false,
+    };
+  }, [state.x, state.y]);
 
   const handleTouchMove = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length !== 1 || !dragRef.current.active) return;
+    const t = e.touches[0];
+    if (!t) return;
     const rect = containerRef.current?.getBoundingClientRect();
-    if (e.touches.length === 2 && pinchRef.current?.active) {
-      const [a, b] = [e.touches[0], e.touches[1]];
-      if (!a || !b) return;
-      const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-      const pinch = pinchRef.current;
-      const ratio = dist / pinch.startDist;
-      setState((prev) => {
-        const next = zoomAround(
-          { ...prev, scale: pinch.startScale },
-          pinch.midX,
-          pinch.midY,
-          pinch.startScale * ratio
-        );
-        return clampPan(next, rect?.width ?? 0, rect?.height ?? 0);
-      });
-      return;
-    }
-    if (e.touches.length === 1 && dragRef.current.active) {
-      const t = e.touches[0];
-      if (!t) return;
-      const drag = dragRef.current;
-      const dx = t.clientX - drag.startX;
-      const dy = t.clientY - drag.startY;
-      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) drag.moved = true;
-      setState((prev) =>
-        clampPan(
-          { ...prev, x: drag.originX + dx, y: drag.originY + dy },
-          rect?.width ?? 0,
-          rect?.height ?? 0
-        )
-      );
-    }
+    const drag = dragRef.current;
+    const dx = t.clientX - drag.startX;
+    const dy = t.clientY - drag.startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) drag.moved = true;
+    setState((prev) =>
+      clampPan(
+        { ...prev, x: drag.originX + dx, y: drag.originY + dy },
+        rect?.width ?? 0,
+        rect?.height ?? 0
+      )
+    );
   }, []);
 
   const handleTouchEnd = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
-    if (e.touches.length < 2) pinchRef.current = null;
     if (e.touches.length === 0) dragRef.current.active = false;
   }, []);
 
-  // --- Buttons ---
+  // --- Buttons: the ONLY way scale changes ---
   const zoomIn = useCallback(() => {
     const { width, height } = getContainerSize();
     setState((prev) => clampPan(zoomAround(prev, width / 2, height / 2, prev.scale * BUTTON_ZOOM_STEP), width, height));
