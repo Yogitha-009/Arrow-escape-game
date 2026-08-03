@@ -16,15 +16,13 @@ interface ArrowShapeProps {
   isErasing: boolean;
 }
 
-const BODY_STROKE_WIDTH = 0.4;
-const OUTLINE_EXTRA_WIDTH = 0.1;
+const BODY_STROKE_WIDTH = 0.34;
 const HIT_STROKE_WIDTH = 0.85;
 const ARROW_COLOR = "#FFFFFF";
 const BLOCKED_COLOR = "#ff3b3b";
-const OUTLINE_COLOR = "#0b0c16";
 const HINT_GLOW_COLOR = "#FFD60A";
 
-const HEAD_OPTIONS = { length: 0.5, halfWidth: 0.19, baseOffset: 0.06 };
+const HEAD_OPTIONS = { length: 0.42, halfWidth: 0.22, baseOffset: 0 };
 
 export default function ArrowShape({
   arrow,
@@ -89,22 +87,8 @@ export default function ArrowShape({
         />
       )}
 
-      {/* Dark outline drawn first, wider than the body, so a white arrow
-          still reads clearly as a distinct shape rather than blending into
-          neighboring white arrows or the hint glow. */}
-      <path
-        ref={isExiting ? registerDashTarget : undefined}
-        d={pathD}
-        fill="none"
-        stroke={isBlockedFlash ? BLOCKED_COLOR : OUTLINE_COLOR}
-        strokeWidth={BODY_STROKE_WIDTH + OUTLINE_EXTRA_WIDTH}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeDasharray={isExiting && pathLength > 0 ? `${pathLength} ${pathLength}` : undefined}
-        style={{ pointerEvents: "none", transition: "stroke 150ms ease-out" }}
-      />
-
-      {/* The visible body: one continuous rounded-corner stroke. */}
+      {/* Single flat-color stroke, rounded joins/caps only — matches the
+          clean single-line maze-arrow look (no double-outline border). */}
       <path
         ref={isExiting ? registerDashTarget : undefined}
         d={pathD}
@@ -120,8 +104,6 @@ export default function ArrowShape({
         <polygon
           points={headPoints}
           fill={strokeColor}
-          stroke={isBlockedFlash ? BLOCKED_COLOR : OUTLINE_COLOR}
-          strokeWidth={0.06}
           strokeLinejoin="round"
           style={{ pointerEvents: "none", transition: "fill 150ms ease-out" }}
         />
